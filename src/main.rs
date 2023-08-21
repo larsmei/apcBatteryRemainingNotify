@@ -1,9 +1,34 @@
 extern crate winrt_notification;
 
+use std::fmt::{Display, Formatter};
+use std::io::Error;
 use std::time;
-use snmp::{SyncSession, Value};
+use snmp::{SnmpError, SyncSession, Value};
 use clap::Parser;
 use winrt_notification::{Duration, Sound, Toast};
+
+#[derive(Debug)]
+struct MyError{
+    message: String,
+}
+
+impl Display for MyError{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{}", self.message)
+    }
+}
+
+impl From<std::io::Error> for MyError{
+    fn from(value: Error) -> Self {
+        MyError { message: value.to_string()}
+    }
+}
+
+impl From<SnmpError> for MyError{
+    fn from(value: SnmpError) -> Self {
+        MyError { message: format!("{:?}",value)}
+    }
+}
 
 fn show_notification(message: &str) {
     // Erstellen eines Toast-Objekts mit dem Nachrichtentext
@@ -25,48 +50,37 @@ struct Args {
     usv_community: String,
 }
 
-fn get_input_voltage(apc_ip: &str, apc_community: &[u8]) -> usize {
+fn get_input_voltage(apc_ip: &str, apc_community: &[u8]) -> Result<usize,MyError> {
     let apc_input_voltage_oid = [1,3,6,1,4,1,318,1,1,1,3,3,1,0];
     let timeout = std::time::Duration::from_secs(2);
-    let mut session = match SyncSession::new(apc_ip, apc_community,Some(timeout), 0) {
-        Ok(session) => session,
-        Err(_e) => return 0,
-    };
-    let mut response = match session.get(&apc_input_voltage_oid){
-        Ok(session) => session,
-        Err(_e) => return 0,
-    };
+    let mut session = SyncSession::new(apc_ip, apc_community,Some(timeout), 0)?;
+    let mut response = session.get(&apc_input_voltage_oid)?;
+
     if let Some((_oid, value)) = response.varbinds.next() {
         // Überprüfen Sie, ob der Wert ein Integer ist
         if let Value::Unsigned32(battery_time) = value {
             // Zeigen Sie die verbleibende Batterielaufzeit im Terminal an
             let voltage:usize = battery_time as usize / 10;
-            return voltage
+            return Ok(voltage)
         }
     }
-    0
+    Err(MyError{message: "error reading voltage".to_string()})
 }
 
-fn get_remaining_minutes(apc_ip: &str, apc_community: &[u8]) -> usize {
+fn get_remaining_minutes(apc_ip: &str, apc_community: &[u8]) -> Result<usize,MyError> {
     let apc_battery_time_oid = [1,3,6,1,4,1,318,1,1,1,2,2,3,0];
     let timeout = std::time::Duration::from_secs(2);
-    let mut session = match SyncSession::new(apc_ip, apc_community,Some(timeout), 0) {
-        Ok(session) => session,
-        Err(_e) => return 0,
-    };
-    let mut response = match session.get(&apc_battery_time_oid){
-        Ok(session) => session,
-        Err(_e) => return 0,
-    };
+    let mut session = SyncSession::new(apc_ip, apc_community,Some(timeout), 0)?;
+    let mut response = session.get(&apc_battery_time_oid)?;
     if let Some((_oid, value)) = response.varbinds.next() {
         // Überprüfen Sie, ob der Wert ein Integer ist
         if let Value::Timeticks(battery_time) = value {
             // Zeigen Sie die verbleibende Batterielaufzeit im Terminal an
             let minutes :usize = battery_time as usize / 100 /60;
-            return minutes
+            return Ok(minutes)
         }
     }
-    0
+    Err(MyError{message: "error reading time remaining".to_string()})
 }
 
 
@@ -80,12 +94,32 @@ fn main() {
     let apc_community = usv_community.as_bytes();
 
     loop {
-        let restzeit=get_remaining_minutes(apc_ip, apc_community);
-        let input_voltage=get_input_voltage(apc_ip, apc_community);
 
-        if input_voltage < 200 {
-            let message=format!("Eingangsspannung: {} Volt \nRestlaufzeit: {} Minuten",input_voltage,restzeit);
-            show_notification( &message );
+        match get_input_voltage(apc_ip, apc_community) {
+            Ok(input_voltage) => {
+                // got input voltage
+                match get_remaining_minutes(apc_ip, apc_community) {
+                    Ok(restzeit) =>{
+                        // got restzeit and input voltage
+                        let message=format!(
+                            "Eingangsspannung: {} Volt \nRestlaufzeit: {} Minuten",
+                            input_voltage,restzeit);
+                        show_notification( &message );
+                    }
+                    Err(e) =>{
+                        // Error getting restzeit
+                        let message=format!(
+                            "Fehler: {}",e);
+                        show_notification( &message );
+                    }
+                }
+            }
+            Err(e) => {
+                // Error getting input voltage
+                let message=format!(
+                            "Fehler: {}",e);
+                show_notification( &message );
+            }
         }
 
         std::thread::sleep(time::Duration::from_secs(30));
