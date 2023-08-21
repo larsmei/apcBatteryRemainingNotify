@@ -101,10 +101,12 @@ fn main() {
                 match get_remaining_minutes(apc_ip, apc_community) {
                     Ok(restzeit) =>{
                         // got restzeit and input voltage
-                        let message=format!(
+                        if input_voltage < 200{
+                            let message=format!(
                             "Eingangsspannung: {} Volt \nRestlaufzeit: {} Minuten",
                             input_voltage,restzeit);
-                        show_notification( &message );
+                            show_notification( &message );
+                        }
                     }
                     Err(e) =>{
                         // Error getting restzeit
